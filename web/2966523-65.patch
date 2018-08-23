@@ -1,0 +1,597 @@
+diff --git a/core/lib/Drupal/Core/Command/DbDumpCommand.php b/core/lib/Drupal/Core/Command/DbDumpCommand.php
+index aa81af041f..a260fff8a9 100644
+--- a/core/lib/Drupal/Core/Command/DbDumpCommand.php
++++ b/core/lib/Drupal/Core/Command/DbDumpCommand.php
+@@ -259,8 +259,12 @@ protected function getTableCollation(Connection $connection, $table, &$definitio
+     $query = $connection->query("SHOW TABLE STATUS LIKE '{" . $table . "}'");
+     $data = $query->fetchAssoc();
+ 
++    // Map the collation to a character set. For example, 'utf8mb4_general_ci'
++    // (MySQL 5) or 'utf8mb4_0900_ai_ci' (MySQL 8) will be mapped to 'utf8mb4'.
++    list($charset,) = explode('_', $data['Collation'], 2);
++
+     // Set `mysql_character_set`. This will be ignored by other backends.
+-    $definition['mysql_character_set'] = str_replace('_general_ci', '', $data['Collation']);
++    $definition['mysql_character_set'] = $charset;
+   }
+ 
+   /**
+diff --git a/core/lib/Drupal/Core/Database/Driver/mysql/Connection.php b/core/lib/Drupal/Core/Database/Driver/mysql/Connection.php
+index 164f68a947..626be4bba6 100644
+--- a/core/lib/Drupal/Core/Database/Driver/mysql/Connection.php
++++ b/core/lib/Drupal/Core/Database/Driver/mysql/Connection.php
+@@ -64,6 +64,277 @@ class Connection extends DatabaseConnection {
+    */
+   const MIN_MAX_ALLOWED_PACKET = 1024;
+ 
++  /**
++   * The list of MySQL reserved key words.
++   *
++   * @link https://dev.mysql.com/doc/refman/8.0/en/keywords.html
++   */
++  private $reservedKeyWords = [
++    'accessible',
++    'add',
++    'admin',
++    'all',
++    'alter',
++    'analyze',
++    'and',
++    'as',
++    'asc',
++    'asensitive',
++    'before',
++    'between',
++    'bigint',
++    'binary',
++    'blob',
++    'both',
++    'by',
++    'call',
++    'cascade',
++    'case',
++    'change',
++    'char',
++    'character',
++    'check',
++    'collate',
++    'column',
++    'condition',
++    'constraint',
++    'continue',
++    'convert',
++    'create',
++    'cross',
++    'cube',
++    'cume_dist',
++    'current_date',
++    'current_time',
++    'current_timestamp',
++    'current_user',
++    'cursor',
++    'database',
++    'databases',
++    'day_hour',
++    'day_microsecond',
++    'day_minute',
++    'day_second',
++    'dec',
++    'decimal',
++    'declare',
++    'default',
++    'delayed',
++    'delete',
++    'dense_rank',
++    'desc',
++    'describe',
++    'deterministic',
++    'distinct',
++    'distinctrow',
++    'div',
++    'double',
++    'drop',
++    'dual',
++    'each',
++    'else',
++    'elseif',
++    'empty',
++    'enclosed',
++    'escaped',
++    'except',
++    'exists',
++    'exit',
++    'explain',
++    'false',
++    'fetch',
++    'first_value',
++    'float',
++    'float4',
++    'float8',
++    'for',
++    'force',
++    'foreign',
++    'from',
++    'fulltext',
++    'function',
++    'generated',
++    'get',
++    'grant',
++    'group',
++    'grouping',
++    'groups',
++    'having',
++    'high_priority',
++    'hour_microsecond',
++    'hour_minute',
++    'hour_second',
++    'if',
++    'ignore',
++    'in',
++    'index',
++    'infile',
++    'inner',
++    'inout',
++    'insensitive',
++    'insert',
++    'int',
++    'int1',
++    'int2',
++    'int3',
++    'int4',
++    'int8',
++    'integer',
++    'interval',
++    'into',
++    'io_after_gtids',
++    'io_before_gtids',
++    'is',
++    'iterate',
++    'join',
++    'json_table',
++    'key',
++    'keys',
++    'kill',
++    'lag',
++    'last_value',
++    'lead',
++    'leading',
++    'leave',
++    'left',
++    'like',
++    'limit',
++    'linear',
++    'lines',
++    'load',
++    'localtime',
++    'localtimestamp',
++    'lock',
++    'long',
++    'longblob',
++    'longtext',
++    'loop',
++    'low_priority',
++    'master_bind',
++    'master_ssl_verify_server_cert',
++    'match',
++    'maxvalue',
++    'mediumblob',
++    'mediumint',
++    'mediumtext',
++    'middleint',
++    'minute_microsecond',
++    'minute_second',
++    'mod',
++    'modifies',
++    'natural',
++    'not',
++    'no_write_to_binlog',
++    'nth_value',
++    'ntile',
++    'null',
++    'numeric',
++    'of',
++    'on',
++    'optimize',
++    'optimizer_costs',
++    'option',
++    'optionally',
++    'or',
++    'order',
++    'out',
++    'outer',
++    'outfile',
++    'over',
++    'partition',
++    'percent_rank',
++    'persist',
++    'persist_only',
++    'precision',
++    'primary',
++    'procedure',
++    'purge',
++    'range',
++    'rank',
++    'read',
++    'reads',
++    'read_write',
++    'real',
++    'recursive',
++    'references',
++    'regexp',
++    'release',
++    'rename',
++    'repeat',
++    'replace',
++    'require',
++    'resignal',
++    'restrict',
++    'return',
++    'revoke',
++    'right',
++    'rlike',
++    'row',
++    'rows',
++    'row_number',
++    'schema',
++    'schemas',
++    'second_microsecond',
++    'select',
++    'sensitive',
++    'separator',
++    'set',
++    'show',
++    'signal',
++    'smallint',
++    'spatial',
++    'specific',
++    'sql',
++    'sqlexception',
++    'sqlstate',
++    'sqlwarning',
++    'sql_big_result',
++    'sql_calc_found_rows',
++    'sql_small_result',
++    'ssl',
++    'starting',
++    'stored',
++    'straight_join',
++    'system',
++    'table',
++    'terminated',
++    'then',
++    'tinyblob',
++    'tinyint',
++    'tinytext',
++    'to',
++    'trailing',
++    'trigger',
++    'true',
++    'undo',
++    'union',
++    'unique',
++    'unlock',
++    'unsigned',
++    'update',
++    'usage',
++    'use',
++    'using',
++    'utc_date',
++    'utc_time',
++    'utc_timestamp',
++    'values',
++    'varbinary',
++    'varchar',
++    'varcharacter',
++    'varying',
++    'virtual',
++    'when',
++    'where',
++    'while',
++    'window',
++    'with',
++    'write',
++    'xor',
++    'year_month',
++    'zerofill',
++  ];
++
+   /**
+    * Constructs a Connection object.
+    */
+@@ -160,7 +431,8 @@ public static function open(array &$connection_options = []) {
+ 
+     // Force MySQL to use the UTF-8 character set. Also set the collation, if a
+     // certain one has been set; otherwise, MySQL defaults to
+-    // 'utf8mb4_general_ci' for utf8mb4.
++    // 'utf8mb4_general_ci' (MySQL 5) or 'utf8mb4_0900_ai_ci' (MySQL 8) for
++    // utf8mb4.
+     if (!empty($connection_options['collation'])) {
+       $pdo->exec('SET NAMES ' . $charset . ' COLLATE ' . $connection_options['collation']);
+     }
+@@ -179,9 +451,18 @@ public static function open(array &$connection_options = []) {
+     $connection_options += [
+       'init_commands' => [],
+     ];
++
++    $sql_mode = 'ANSI,STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,ONLY_FULL_GROUP_BY';
++    // NO_AUTO_CREATE_USER is removed in MySQL 8.0.11
++    // https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-11.html#mysqld-8-0-11-deprecation-removal
++    $version_server = $pdo->getAttribute(\PDO::ATTR_SERVER_VERSION);
++    if (version_compare($version_server, '8.0.11', '<')) {
++      $sql_mode .= ',NO_AUTO_CREATE_USER';
++    }
+     $connection_options['init_commands'] += [
+-      'sql_mode' => "SET sql_mode = 'ANSI,STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,ONLY_FULL_GROUP_BY'",
++      'sql_mode' => "SET sql_mode = '$sql_mode'",
+     ];
++
+     // Execute initial commands.
+     foreach ($connection_options['init_commands'] as $sql) {
+       $pdo->exec($sql);
+@@ -190,6 +471,49 @@ public static function open(array &$connection_options = []) {
+     return $pdo;
+   }
+ 
++  /**
++   * {@inheritdoc}
++   */
++  public function escapeField($field) {
++    $field = parent::escapeField($field);
++    return $this->quoteIdentifier($field);
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function escapeAlias($field) {
++    // Quote fields so that MySQL reserved words like 'function' can be used
++    // as aliases.
++    $field = parent::escapeAlias($field);
++    return $this->quoteIdentifier($field);
++  }
++
++  /**
++   * Quotes an identifier if it matches a MySQL reserved keyword.
++   *
++   * @param string $identifier
++   *   The field to check.
++   *
++   * @return string
++   *   The identifier, quoted if it matches a MySQL reserved keyword.
++   */
++  private function quoteIdentifier($identifier) {
++    // Quote identifiers so that MySQL reserved words like 'function' can be
++    // used as column names. Sometimes the 'table.column_name' format is passed
++    // in. For example,
++    // \Drupal\Core\Entity\Sql\SqlContentEntityStorage::buildQuery() adds a
++    // condition on "base.uid" while loading user entities.
++    if (strpos($identifier, '.') !== FALSE) {
++      list($table, $identifier) = explode('.', $identifier, 2);
++    }
++    if (in_array(strtolower($identifier), $this->reservedKeyWords, TRUE)) {
++      // Quote the string for MySQL reserved keywords.
++      $identifier = '"' . $identifier . '"';
++    }
++    return isset($table) ? $table . '.' . $identifier : $identifier;
++  }
++
+   /**
+    * {@inheritdoc}
+    */
+diff --git a/core/lib/Drupal/Core/Database/Driver/mysql/Insert.php b/core/lib/Drupal/Core/Database/Driver/mysql/Insert.php
+index 8b7c602e87..3d397c5275 100644
+--- a/core/lib/Drupal/Core/Database/Driver/mysql/Insert.php
++++ b/core/lib/Drupal/Core/Database/Driver/mysql/Insert.php
+@@ -44,6 +44,10 @@ public function __toString() {
+     // Default fields are always placed first for consistency.
+     $insert_fields = array_merge($this->defaultFields, $this->insertFields);
+ 
++    $insert_fields = array_map(function ($field) {
++      return $this->connection->escapeField($field);
++    }, $insert_fields);
++
+     // If we're selecting from a SelectQuery, finish building the query and
+     // pass it back, as any remaining options are irrelevant.
+     if (!empty($this->fromQuery)) {
+diff --git a/core/lib/Drupal/Core/Database/Driver/mysql/Schema.php b/core/lib/Drupal/Core/Database/Driver/mysql/Schema.php
+index baac2eee5a..cd0e600f57 100644
+--- a/core/lib/Drupal/Core/Database/Driver/mysql/Schema.php
++++ b/core/lib/Drupal/Core/Database/Driver/mysql/Schema.php
+@@ -121,8 +121,9 @@ protected function createTableSql($name, $table) {
+ 
+     $sql .= 'ENGINE = ' . $table['mysql_engine'] . ' DEFAULT CHARACTER SET ' . $table['mysql_character_set'];
+     // By default, MySQL uses the default collation for new tables, which is
+-    // 'utf8mb4_general_ci' for utf8mb4. If an alternate collation has been
+-    // set, it needs to be explicitly specified.
++    // 'utf8mb4_general_ci' (MySQL 5) or 'utf8mb4_0900_ai_ci' (MySQL 8) for
++    // utf8mb4. If an alternate collation has been set, it needs to be
++    // explicitly specified.
+     // @see \Drupal\Core\Database\Driver\mysql\Schema
+     if (!empty($info['collation'])) {
+       $sql .= ' COLLATE ' . $info['collation'];
+@@ -154,12 +155,15 @@ protected function createFieldSql($name, $spec) {
+       if (isset($spec['length'])) {
+         $sql .= '(' . $spec['length'] . ')';
+       }
++      if (isset($spec['type']) && $spec['type'] == 'varchar_ascii') {
++        $sql .= ' CHARACTER SET ascii';
++      }
+       if (!empty($spec['binary'])) {
+         $sql .= ' BINARY';
+       }
+       // Note we check for the "type" key here. "mysql_type" is VARCHAR:
+-      if (isset($spec['type']) && $spec['type'] == 'varchar_ascii') {
+-        $sql .= ' CHARACTER SET ascii COLLATE ascii_general_ci';
++      elseif (isset($spec['type']) && $spec['type'] == 'varchar_ascii') {
++        $sql .= ' COLLATE ascii_general_ci';
+       }
+     }
+     elseif (isset($spec['precision']) && isset($spec['scale'])) {
+@@ -650,11 +654,11 @@ public function getComment($table, $column = NULL) {
+       $condition->condition('column_name', $column);
+       $condition->compile($this->connection, $this);
+       // Don't use {} around information_schema.columns table.
+-      return $this->connection->query("SELECT column_comment FROM information_schema.columns WHERE " . (string) $condition, $condition->arguments())->fetchField();
++      return $this->connection->query("SELECT column_comment as column_comment FROM information_schema.columns WHERE " . (string) $condition, $condition->arguments())->fetchField();
+     }
+     $condition->compile($this->connection, $this);
+     // Don't use {} around information_schema.tables table.
+-    $comment = $this->connection->query("SELECT table_comment FROM information_schema.tables WHERE " . (string) $condition, $condition->arguments())->fetchField();
++    $comment = $this->connection->query("SELECT table_comment as table_comment FROM information_schema.tables WHERE " . (string) $condition, $condition->arguments())->fetchField();
+     // Work-around for MySQL 5.0 bug http://bugs.mysql.com/bug.php?id=11379
+     return preg_replace('/; InnoDB free:.*$/', '', $comment);
+   }
+diff --git a/core/lib/Drupal/Core/Database/Driver/mysql/Upsert.php b/core/lib/Drupal/Core/Database/Driver/mysql/Upsert.php
+index 6c1af1e812..8eda775c0a 100644
+--- a/core/lib/Drupal/Core/Database/Driver/mysql/Upsert.php
++++ b/core/lib/Drupal/Core/Database/Driver/mysql/Upsert.php
+@@ -18,6 +18,9 @@ public function __toString() {
+ 
+     // Default fields are always placed first for consistency.
+     $insert_fields = array_merge($this->defaultFields, $this->insertFields);
++    $insert_fields = array_map(function ($field) {
++      return $this->connection->escapeField($field);
++    }, $insert_fields);
+ 
+     $query = $comments . 'INSERT INTO {' . $this->table . '} (' . implode(', ', $insert_fields) . ') VALUES ';
+ 
+diff --git a/core/lib/Drupal/Core/Database/Schema.php b/core/lib/Drupal/Core/Database/Schema.php
+index 279b5d41b0..4bd0a9bdf3 100644
+--- a/core/lib/Drupal/Core/Database/Schema.php
++++ b/core/lib/Drupal/Core/Database/Schema.php
+@@ -199,7 +199,7 @@ public function findTables($table_expression) {
+     // couldn't use db_select() here because it would prefix
+     // information_schema.tables and the query would fail.
+     // Don't use {} around information_schema.tables table.
+-    $results = $this->connection->query("SELECT table_name FROM information_schema.tables WHERE " . (string) $condition, $condition->arguments());
++    $results = $this->connection->query("SELECT table_name as table_name FROM information_schema.tables WHERE " . (string) $condition, $condition->arguments());
+     foreach ($results as $table) {
+       // Take into account tables that have an individual prefix.
+       if (isset($individually_prefixed_tables[$table->table_name])) {
+diff --git a/core/modules/system/tests/modules/database_test/database_test.install b/core/modules/system/tests/modules/database_test/database_test.install
+index a5450b1064..ab952c746e 100644
+--- a/core/modules/system/tests/modules/database_test/database_test.install
++++ b/core/modules/system/tests/modules/database_test/database_test.install
+@@ -287,6 +287,10 @@ function database_test_schema() {
+         'description' => 'A column with preserved name.',
+         'type' => 'text',
+       ],
++      'function' => [
++        'description' => 'A column with reserved name in MySQL 8.',
++        'type' => 'text',
++      ],
+     ],
+     'primary key' => ['id'],
+   ];
+diff --git a/core/modules/system/tests/src/Functional/Entity/Update/LangcodeToAsciiUpdateTest.php b/core/modules/system/tests/src/Functional/Entity/Update/LangcodeToAsciiUpdateTest.php
+index 536fe41f79..653a437239 100644
+--- a/core/modules/system/tests/src/Functional/Entity/Update/LangcodeToAsciiUpdateTest.php
++++ b/core/modules/system/tests/src/Functional/Entity/Update/LangcodeToAsciiUpdateTest.php
+@@ -40,7 +40,8 @@ public function testLangcodeColumnCollation() {
+     ];
+     foreach ($tables as $table => $columns) {
+       foreach ($columns as $column) {
+-        $this->assertEqual('utf8mb4_general_ci', $this->getColumnCollation($table, $column), 'Found correct starting collation for ' . $table . '.' . $column);
++        // Depending on MYSQL versions you get different collations.
++        $this->assertContains($this->getColumnCollation($table, $column), ['utf8mb4_0900_ai_ci', 'utf8mb4_general_ci'], 'Found correct starting collation for ' . $table . '.' . $column);
+       }
+     }
+ 
+diff --git a/core/tests/Drupal/KernelTests/Core/Database/DatabaseTestBase.php b/core/tests/Drupal/KernelTests/Core/Database/DatabaseTestBase.php
+index baf7895516..784bfd6189 100644
+--- a/core/tests/Drupal/KernelTests/Core/Database/DatabaseTestBase.php
++++ b/core/tests/Drupal/KernelTests/Core/Database/DatabaseTestBase.php
+@@ -151,6 +151,7 @@ public static function addSampleData() {
+       ->fields([
+         'id' => 1,
+         'offset' => 'Offset value 1',
++        'function' => 'Function value 1',
+       ])
+       ->execute();
+   }
+diff --git a/core/tests/Drupal/KernelTests/Core/Database/InsertTest.php b/core/tests/Drupal/KernelTests/Core/Database/InsertTest.php
+index 3812151bab..d6b0f8dd80 100644
+--- a/core/tests/Drupal/KernelTests/Core/Database/InsertTest.php
++++ b/core/tests/Drupal/KernelTests/Core/Database/InsertTest.php
+@@ -198,14 +198,20 @@ public function testInsertSelectAll() {
+    * Tests that we can INSERT INTO a special named column.
+    */
+   public function testSpecialColumnInsert() {
+-    $id = db_insert('test_special_columns')
++    $this->connection->insert('test_special_columns')
+       ->fields([
+         'id' => 2,
+         'offset' => 'Offset value 2',
++        'function' => 'foobar',
+       ])
+       ->execute();
+-    $saved_value = db_query('SELECT "offset" FROM {test_special_columns} WHERE id = :id', [':id' => 2])->fetchField();
+-    $this->assertIdentical($saved_value, 'Offset value 2', 'Can retrieve special column name value after inserting.');
++    $result = $this->connection->select('test_special_columns')
++      ->fields('test_special_columns', ['offset', 'function'])
++      ->condition('test_special_columns.function', 'foobar')
++      ->execute();
++    $record = $result->fetch();
++    $this->assertSame('Offset value 2', $record->offset);
++    $this->assertSame('foobar', $record->function);
+   }
+ 
+ }
+diff --git a/core/tests/Drupal/KernelTests/Core/Database/SchemaTest.php b/core/tests/Drupal/KernelTests/Core/Database/SchemaTest.php
+index f5a35cdf4b..27575b3d93 100644
+--- a/core/tests/Drupal/KernelTests/Core/Database/SchemaTest.php
++++ b/core/tests/Drupal/KernelTests/Core/Database/SchemaTest.php
+@@ -95,7 +95,7 @@ public function testSchema() {
+       $columns = $this->connection->query('SHOW FULL COLUMNS FROM {test_table}');
+       foreach ($columns as $column) {
+         if ($column->Field == 'test_field_string') {
+-          $string_check = ($column->Collation == 'utf8mb4_general_ci');
++          $string_check = ($column->Collation == 'utf8mb4_general_ci' || $column->Collation == 'utf8mb4_0900_ai_ci');
+         }
+         if ($column->Field == 'test_field_string_ascii') {
+           $string_ascii_check = ($column->Collation == 'ascii_general_ci');
+diff --git a/core/tests/Drupal/KernelTests/Core/Database/UpsertTest.php b/core/tests/Drupal/KernelTests/Core/Database/UpsertTest.php
+index 5c62f87f6b..461117797f 100644
+--- a/core/tests/Drupal/KernelTests/Core/Database/UpsertTest.php
++++ b/core/tests/Drupal/KernelTests/Core/Database/UpsertTest.php
+@@ -53,4 +53,40 @@ public function testUpsert() {
+     $this->assertEqual($person->name, 'Meredith', 'Name was not changed.');
+   }
+ 
++  /**
++   * Tests that we can upsert records with a special named column.
++   */
++  public function testSpecialColumnUpsert() {
++    $num_records_before = $this->connection->query('SELECT COUNT(*) FROM {test_special_columns}')->fetchField();
++    $upsert = $this->connection->upsert('test_special_columns')
++      ->key('id')
++      ->fields(['id', 'offset', 'function']);
++
++    // Add a new row.
++    $upsert->values([
++      'id' => 2,
++      'offset' => 'Offset 2',
++      'function' => 'Function 2',
++    ]);
++
++    // Update an existing row.
++    $upsert->values([
++      'id' => 1,
++      'offset' => 'Offset 1 updated',
++      'function' => 'Function 1 updated',
++    ]);
++
++    $upsert->execute();
++    $num_records_after = $this->connection->query('SELECT COUNT(*) FROM {test_special_columns}')->fetchField();
++    $this->assertEquals($num_records_before + 1, $num_records_after, 'Rows were inserted and updated properly.');
++
++    $record = $this->connection->query('SELECT * FROM {test_special_columns} WHERE id = :id', [':id' => 1])->fetch();
++    $this->assertEquals($record->offset, 'Offset 1 updated');
++    $this->assertEquals($record->function, 'Function 1 updated');
++
++    $record = $this->connection->query('SELECT * FROM {test_special_columns} WHERE id = :id', [':id' => 2])->fetch();
++    $this->assertEquals($record->offset, 'Offset 2');
++    $this->assertEquals($record->function, 'Function 2');
++  }
++
+ }

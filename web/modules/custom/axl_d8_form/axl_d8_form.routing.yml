@@ -1,0 +1,7 @@
+axl_d8_form.form:
+  path: /myform
+  defaults:
+    _title: Custom form
+    _form: '\Drupal\axl_d8_form\Form\AxlForm'
+  requirements:
+    _permission: 'access content'
